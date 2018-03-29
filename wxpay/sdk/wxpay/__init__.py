@@ -1,0 +1,1 @@
+from .wxpay import *

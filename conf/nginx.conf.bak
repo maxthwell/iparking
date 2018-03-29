@@ -1,0 +1,286 @@
+worker_processes  1;        #nginx worker 数量
+error_log logs/error.log;   #指定错误日志文件路径
+user root;
+events {
+    worker_connections 1024;
+}
+http {
+    init_by_lua_file /root/lora/qh/lua/init/init.lua;
+	init_worker_by_lua_file /root/lora/qh/lua/init/status_checker.lua;
+
+    lua_code_cache off;
+    #增加库文件放置地方 除了安装位置的lualib外的 此处放在comm中
+    lua_package_path '/root/lora/qh/lua/comm/?.lua;;';
+    lua_package_cpath '/root/lora/qh/lua/c/?.so;;';
+
+    lua_socket_log_errors off; 
+    lua_shared_dict token_cache 10m; 
+    client_max_body_size 1m;
+    client_body_buffer_size 100k;
+    upstream pg_server {
+	    postgres_server 114.215.192.141:5432 dbname=loraserver
+		    user=mxx password=mxx123456;
+	    postgres_keepalive max=800 mode=single overflow=reject;
+    }
+    server {
+        listen 88;
+
+	 ssl on;
+        ssl_certificate /root/lora/js/conf/server.crt;
+        ssl_certificate_key /root/lora/js/conf/server.key;
+	server_name  www.workingbao.com;
+        # 在代码路径中使用nginx变量
+        # 注意： nginx var 的变量一定要谨慎，否则将会带来非常大的风险
+        location ~ ^/api/([-_a-zA-Z0-9/]+) {
+		resolver 8.8.8.8;
+		add_header 'Access-Control-Allow-Origin' '*';
+		if ($request_method = "OPTIONS") {
+			add_header 'Access-Control-Allow-Origin' "$http_origin";
+			add_header 'Access-Control-Allow-Credentials' 'true';
+			add_header 'Access-Control-Max-Age' 1728000;
+			add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+			add_header 'Access-Control-Allow-Headers' 'Authorization,Content-Type,Accept,Origin,User-Agent,DNT,Cache-Control,X-Mx-ReqToken,Keep-Alive,X-Requested-With,If-Modified-Since,token,userId,time';
+			add_header 'Content-Length' 0;
+			add_header 'Content-Type' 'text/plain charset=UTF-8';
+			return 204;
+
+		}
+            #access_by_lua_file  /root/lora/qh/lua/comm/access_check.lua;
+            content_by_lua_file /root/lora/qh/lua/$1.lua;
+        }
+        #location /webs {
+        #    content_by_lua_file /root/lora/qh/lua/webs.lua;
+        #}
+
+	location /datadown_urls{
+                 echo '["http://www.workingbao.com:8000/rpc"]';
+                 #echo '["http://www.workingbao.com:8000/rpc", "http://guodongiot.com:8000/rpc"]';
+        }
+	
+	location /node_approved_dir{
+		 echo '/root/node_approved/';
+	}
+	location /city_code_file_path{ 
+                 echo '/root/lora/qh/lua/comm/city_code.txt';
+        }
+	location /email_link_url_host{
+                 echo 'https://www.workingbao.com/';
+        }
+	location /openapi_link_url{
+                 echo 'https://www.workingbao.com:88/';
+        }
+	 location /openapi_data_times_limit{
+                # 1 second,post times 
+                echo '0.02';
+        }
+        location /openapi_send_data_time_limit{
+                # 1 second,post times
+                echo '10';
+        }
+	
+	location /random_str{
+                set_secure_random_lcalpha $res 16;
+                echo $res;
+        }
+    	# location /files {
+	# 	resolver 8.8.8.8;
+        #         add_header 'Access-Control-Allow-Origin' '*';
+	# 	access_by_lua_file  /root/lora/qh/lua/File_DownloadAuth.lua;
+        # 	alias  /root/lora/qh/api_help/doc;
+    	# }
+	location /file_auth {
+        	# access_by_lua_file  /root/lora/qh/lua/File_TestDown.lua;
+		content_by_lua_file /root/lora/qh/lua/File_DownloadAuth.lua;
+		# add_header 'X-Accel-Redirect' '/save/zip/demo.zip';
+	}
+	location /database_conf {
+                echo '{"host":"114.215.192.141","port":"5432","database":"loraserver","user":"mxx","password":"mxx123456"}';
+        }
+	location /postgres {
+		internal;
+
+		default_type text/html;
+		set_by_lua $query_sql 'return ngx.unescape_uri(ngx.var.arg_sql)';
+
+		postgres_pass   pg_server;
+		rds_json          on;
+		rds_json_buffer_size 16k;
+		postgres_query  $query_sql;
+		postgres_connect_timeout 10s;
+		postgres_result_timeout 20s;
+	}
+    }
+    server {
+        listen 89;
+
+        # ssl on;
+        #ssl_certificate /root/lora/js/conf/server.crt;
+        #ssl_certificate_key /root/lora/js/conf/server.key;
+        server_name  www.workingbao.com;
+        # 在代码路径中使用nginx变量
+        # 注意： nginx var 的变量一定要谨慎，否则将会带来非常大的风险
+        location ~ ^/api/([-_a-zA-Z0-9/]+) {
+                resolver 8.8.8.8;
+                add_header 'Access-Control-Allow-Origin' '*';
+                if ($request_method = "OPTIONS") {
+                        add_header 'Access-Control-Allow-Origin' "$http_origin";
+                        add_header 'Access-Control-Allow-Credentials' 'true';
+                        add_header 'Access-Control-Max-Age' 1728000;
+                        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+                        add_header 'Access-Control-Allow-Headers' 'Authorization,Content-Type,Accept,Origin,User-Agent,DNT,Cache-Control,X-Mx-ReqToken,Keep-Alive,X-Requested-With,If-Modified-Since,token,userId,time';
+                        add_header 'Content-Length' 0;
+                        add_header 'Content-Type' 'text/plain charset=UTF-8';
+                        return 204;
+
+                }
+            #access_by_lua_file  /root/lora/qh/lua/comm/access_check.lua;
+            content_by_lua_file /root/lora/qh/lua/$1.lua;
+        }
+        #location /webs {
+        #    content_by_lua_file /root/lora/qh/lua/webs.lua;
+        #}
+
+        location /datadown_urls{
+                 echo '["http://www.workingbao.com:8000/rpc"]';
+                 #echo '["http://www.workingbao.com:8000/rpc", "http://guodongiot.com:8000/rpc"]';
+        }
+
+        location /node_approved_dir{
+                 echo '/root/node_approved/';
+        }
+        location /city_code_file_path{ 
+                 echo '/root/lora/qh/lua/comm/city_code.txt';
+        }
+        location /email_link_url_host{
+                 echo 'http://www.workingbao.com/';
+        }
+        location /openapi_link_url{
+                 echo 'http://www.workingbao.com:88/';
+        }
+         location /openapi_data_times_limit{
+                # 1 second,post times 
+                echo '0.02';
+        }
+        location /openapi_send_data_time_limit{
+                # 1 second,post times
+                echo '10';
+        }
+
+        location /random_str{
+                set_secure_random_lcalpha $res 16;
+                echo $res;
+        }
+        # location /files {
+        #       resolver 8.8.8.8;
+        #         add_header 'Access-Control-Allow-Origin' '*';
+        #       access_by_lua_file  /root/lora/qh/lua/File_DownloadAuth.lua;
+        #       alias  /root/lora/qh/api_help/doc;
+        # }
+        location /file_auth {
+                # access_by_lua_file  /root/lora/qh/lua/File_TestDown.lua;
+                content_by_lua_file /root/lora/qh/lua/File_DownloadAuth.lua;
+                # add_header 'X-Accel-Redirect' '/save/zip/demo.zip';
+        }
+        location /database_conf {
+                echo '{"host":"114.215.192.141","port":"5432","database":"loraserver","user":"mxx","password":"mxx123456"}';
+        }
+        location /postgres {
+                internal;
+
+                default_type text/html;
+                set_by_lua $query_sql 'return ngx.unescape_uri(ngx.var.arg_sql)';
+
+                postgres_pass   pg_server;
+                rds_json          on;
+                rds_json_buffer_size 16k;
+                postgres_query  $query_sql;
+                postgres_connect_timeout 10s;
+                postgres_result_timeout 20s;
+        }
+    }
+    server {
+        listen 19999;
+
+	server_name  www.workingbao.com;
+        # 在代码路径中使用nginx变量
+        # 注意： nginx var 的变量一定要谨慎，否则将会带来非常大的风险
+        location ~ ^/api/([-_a-zA-Z0-9/]+) {
+		resolver 8.8.8.8;
+		add_header 'Access-Control-Allow-Origin' '*';
+		if ($request_method = "OPTIONS") {
+			add_header 'Access-Control-Allow-Origin' "$http_origin";
+			add_header 'Access-Control-Allow-Credentials' 'true';
+			add_header 'Access-Control-Max-Age' 1728000;
+			add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+			add_header 'Access-Control-Allow-Headers' 'Authorization,Content-Type,Accept,Origin,User-Agent,DNT,Cache-Control,X-Mx-ReqToken,Keep-Alive,X-Requested-With,If-Modified-Since,token,userId,time';
+			add_header 'Content-Length' 0;
+			add_header 'Content-Type' 'text/plain charset=UTF-8';
+			return 204;
+
+		}
+            #access_by_lua_file  /root/lora/qh/lua/comm/access_check.lua;
+            content_by_lua_file /root/lora/qh/lua/$1.lua;
+        }
+        #location /webs {
+        #    content_by_lua_file /root/lora/qh/lua/webs.lua;
+        #}
+
+	location /datadown_urls{
+                 echo '["http://www.workingbao.com:8000/rpc"]';
+                 #echo '["http://www.workingbao.com:8000/rpc", "http://guodongiot.com:8000/rpc"]';
+        }
+	
+	location /node_approved_dir{
+		 echo '/root/node_approved/';
+	}
+	location /city_code_file_path{ 
+                 echo '/root/lora/qh/lua/comm/city_code.txt';
+        }
+	location /email_link_url_host{
+                 echo 'http://www.workingbao.com/';
+        }
+	location /openapi_link_url{
+                 echo 'http://www.workingbao.com:88/';
+        }
+	 location /openapi_data_times_limit{
+                # 1 second,post times 
+                echo '0.02';
+        }
+        location /openapi_send_data_time_limit{
+                # 1 second,post times
+                echo '10';
+        }
+	
+	location /random_str{
+                set_secure_random_lcalpha $res 16;
+                echo $res;
+        }
+    	# location /files {
+	# 	resolver 8.8.8.8;
+        #         add_header 'Access-Control-Allow-Origin' '*';
+	# 	access_by_lua_file  /root/lora/qh/lua/File_DownloadAuth.lua;
+        # 	alias  /root/lora/qh/api_help/doc;
+    	# }
+	location /file_auth {
+        	# access_by_lua_file  /root/lora/qh/lua/File_TestDown.lua;
+		content_by_lua_file /root/lora/qh/lua/File_DownloadAuth.lua;
+		# add_header 'X-Accel-Redirect' '/save/zip/demo.zip';
+	}
+	location /database_conf {
+                echo '{"host":"114.215.192.141","port":"5432","database":"loraserver","user":"mxx","password":"mxx123456"}';
+        }
+	location /postgres {
+		internal;
+
+		default_type text/html;
+		set_by_lua $query_sql 'return ngx.unescape_uri(ngx.var.arg_sql)';
+
+		postgres_pass   pg_server;
+		rds_json          on;
+		rds_json_buffer_size 16k;
+		postgres_query  $query_sql;
+		postgres_connect_timeout 10s;
+		postgres_result_timeout 20s;
+	}
+    }
+}

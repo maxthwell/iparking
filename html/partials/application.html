@@ -1,0 +1,174 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+  <table class="table table-hover color-l">
+    <thead class="bg-m-grey font-16">
+      <th>devEUI</th>
+      <th>appEUI</th>
+      <th>appKey</th>
+      <th>usedDevNonces</th>
+      <th>channelListID"</th>
+    </thead>
+    <tbody class="bg-d-grey cd">
+      <tr ng-repeat="node in nodes">
+        <td>{{ node.devEUI }}</td>
+        <td>{{ node.appEUI }}</td>
+        <td>{{ node.appKey }}</td>
+        <td>{{ node.usedDevNonces }}</td>
+        <td>{{ node.channelListID }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="btn-group" role="group" aria-label="...">
+    <button type="button" class="btn btn-success" ng-click="createNode()">新节点</button>
+  </div>
+</div>
+
+<div class="modal fade" id="editNodeModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabel">Edit {{ node.devEUI }}</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="appKey" class="control-label">AppKey:</label>
+            <input type="text" class="form-control" id="appKey" ng-model="node.appKey">
+          </div>
+          <div class="form-group">
+            <label for="rxDelay" class="control-label">RXDelay:</label>
+            <input type="number" class="form-control" id="rxDelay" ng-model="node.rxDelay">
+            <p class="help-block">When left to 0, the default delay will be used.</p>
+          </div>
+          <div class="form-group">
+            <label for="rx1DROffset" class="control-label">RX1 DR Offset:</label>
+            <input type="number" class="form-control" id="rx1DROffset" ng-model="node.rx1DROffset">
+          </div>
+          <div class="form-group">
+            <label for="channelList" class="control-label">Channel-list:</label>
+            <select class="form-control" id="channelList" ng-model="node.channelListID" ng-options="channelList.id as channelList.name for channelList in channelLists">
+              <option value=""></option>
+            </select>
+            <p class="help-block">
+              Leave blank for the default channels (defined by the LoRaWAN specs).
+              Note that this option might not be available for your region.
+            </p>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+      <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="updateNode(node)">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="createNodeModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabelC">新节点</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="devEUI" class="control-label">DevEUI:</label>
+            <input type="text" class="form-control" id="devEUIC" ng-model="node.devEUI">
+          </div>
+          <div class="form-group">
+            <label for="appKey" class="control-label">AppKey:</label>
+            <input type="text" class="form-control" id="appKeyC" ng-model="node.appKey">
+          </div>
+          <div class="form-group">
+            <label for="rxDelay" class="control-label">RXDelay:</label>
+            <input type="number" class="form-control" id="rxDelayC" ng-model="node.rxDelay">
+            <p class="help-block">When left to 0, the default delay will be used.</p>
+          </div>
+          <div class="form-group">
+            <label for="rx1DROffset" class="control-label">RX1 DR Offset:</label>
+            <input type="number" class="form-control" id="rx1DROffsetC" ng-model="node.rx1DROffset">
+          </div>
+          <div class="form-group">
+            <label for="channelList" class="control-label">Channel-list:</label>
+            <select class="form-control" id="channelListC" ng-model="node.channelListID" ng-options="channelList.id as channelList.name for channelList in channelLists">
+              <option value=""></option>
+            </select>
+            <p class="help-block">
+              Leave blank for the default channels, as defined by the LoRaWAN specs.
+              Note that depending upon your region, setting a channel-list might not be available.
+            </p>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+      <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="createNode(node)">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="nodeSessionModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabelS">Node session for {{ ns.devEUI }}</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="devAddr" class="control-label">DevAddr:</label>
+            <button type="button" class="btn btn-default btn-xs pull-right" ng-click="getRandomDevAddr(ns)">生成</button>
+            <input type="text" class="form-control" id="devAddr" ng-model="ns.devAddr">
+          </div>
+          <div class="form-group">
+            <label for="appSKey" class="control-label">AppSKey:</label>
+            <input type="text" class="form-control" id="appSKey" ng-model="ns.appSKey">
+          </div>
+          <div class="form-group">
+            <label for="nwkSKey" class="control-label">NwkSKey:</label>
+            <input type="text" class="form-control" id="nwkSKey" ng-model="ns.nwkSKey">
+          </div>
+          <div class="form-group">
+            <label for="fCntUp" class="control-label">FCnt (up):</label>
+            <input type="number" class="form-control" id="fCntUp" ng-model="ns.fCntUp">
+          </div>
+          <div class="form-group">
+            <label for="fCntDown" class="control-label">FCnt (down):</label>
+            <input type="number" class="form-control" id="fCntDown" ng-model="ns.fCntDown">
+          </div>
+          <div class="form-group">
+            <label for="rxDelay" class="control-label">RXDelay:</label>
+            <input type="number" class="form-control" id="rxDelayS" ng-model="ns.rxDelay">
+            <p class="help-block">When left to 0, the default delay will be used.</p>
+          </div>
+          <div class="form-group">
+            <label for="rx1DROffset" class="control-label">RX1 DR Offset:</label>
+            <input type="number" class="form-control" id="rx1DROffsetS" ng-model="ns.rx1DROffset">
+          </div>
+          <div class="form-group">
+            <label for="devEUI" class="control-label">DevEUI:</label>
+            <input type="text" class="form-control" id="devEUI" ng-model="ns.devEUI" disabled>
+          </div>
+          <div class="form-group">
+            <label for="appEUI" class="control-label">AppEUI:</label>
+            <input type="text" class="form-control" id="appEUI" ng-model="ns.appEUI" disabled>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+      <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="updateNodeSession(ns)">保存</button>
+      </div>
+    </div>
+  </div>
+</div>

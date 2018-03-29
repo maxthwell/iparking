@@ -1,0 +1,42 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+<!--  <ol class="breadcrumb">
+      <li class="active">数据</li>
+  </ol>
+    -->
+  <table class="table table-hover color-l ">
+    <thead class="bg-m-grey font-16 ">
+      <th>DevEUI</th>
+      <th>time</th>
+      <th>data</th>
+      <th>gateway</th>
+      <th>SNR</th>
+      <th>RSSI</th>
+      <th>SeqNo</th>
+      <th>Loss</th>
+      <th>SeqDn</th>
+      <!--<th>channel</th>-->
+      <th>频率</th>
+      <th>速率</th>
+    </thead>
+    <tbody class="bg-d-grey">
+      <tr ng-repeat="data in datalist">
+        <td>{{ data.devEUI }}</td>
+        <td>{{ data.time_s | cutTime }}</td>
+        <td>{{ data.data }}</td>
+        <td>{{ data.gw_macs }}</td>
+        <td>{{ data.snr }}</td>
+        <td>{{ data.rssi }}</td>
+        <td>{{ data.fcnt_up_node }}</td>
+        <td>{{ data.fcnt_up_node - data.fcnt_up_server }}</td>
+        <td>{{ data.fcnt_down }}</td>
+        <!--<td>{{ data.channel }}</td>-->
+        <td>{{ data.frequency }}</td>
+        <td>{{ data.coderate }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>
+

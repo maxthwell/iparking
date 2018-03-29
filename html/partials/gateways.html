@@ -1,0 +1,97 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+<!--  <ol class="breadcrumb">
+      <li class="active">网关</li>
+  </ol>-->
+    
+  <table class="table table-hover color-l">
+    <thead class="bg-m-grey font-16">
+      <th>ID</th>
+      <th>Name</th>
+      <th>time</th>
+      <th>经度</th>
+      <th>纬度</th>
+      <th>高度</th>
+      <th>packageQ</th>
+      <th>packageCQ</th>
+      <th>packageS</th>
+      <th>extraData</th>
+      <th>Actions</th>
+    </thead>
+    <tbody class="bg-d-grey cd">
+      <tr ng-repeat="gateway in gateways">
+        <td>{{ gateway.id }}</td>
+        <td>{{ gateway.name}}</td>
+        <td>{{ gateway.time | cutTime }}</td>
+        <td>{{ gateway.latitude }}</td>
+        <td>{{ gateway.longitude }}</td>
+        <td>{{ gateway.altitude }}</td>
+        <td>{{ gateway.rxPacketsReceived }}</td>
+        <td>{{ gateway.rxPacketsReceivedOK }}</td>
+        <td>{{ gateway.txPacketsEmitted }}</td>
+        <td>{{ gateway.customData }}</td>
+        <td>
+          <button class="btn btn-sm btn-primary "ng-click="editGateway(gateway)">编辑</button>
+          <button class="btn btn-sm btn-danger" ng-click="deleteGateway(gateway)">删除</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="btn-group" role="group" aria-label="...">
+    <button type="button" class="btn btn-success" ng-click="create_()">新网关</button>
+  </div>
+</div>
+
+<div class="modal fade" id="editGatewayModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabel">Edit: {{ gateway.id }}</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="name" class="control-label">Name:</label>
+            <input type="text" class="form-control" id="name" ng-model="gateway.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="updateGateway(gateway)">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="createModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabelC">新网关</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="nameId" class="control-label" >Id:</label>
+            <input type="text" class="form-control" name="id" id="nameId" ng-model="gateway.id" ng-pattern="/[a-zA-Z]{5}/">
+          </div>
+          <div class="form-group">
+            <label for="nameC" class="control-label">Name:</label>
+            <input type="text" class="form-control" name="name" id="nameC" ng-model="gateway.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="createGateway(gateway)">创建</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,76 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+<!--  <ol class="breadcrumb">
+      <li class="active">信道</li>
+  </ol>-->
+
+  <table class="table table-hover">
+    <thead>
+      <th>Name</th>
+      <th class="text-right">Actions</th>
+    </thead>
+    <tbody>
+      <tr ng-repeat="channelList in channelLists">
+        <td>{{ channelList.name }}</td>
+        <td class="text-right">
+            <a class="btn btn-sm btn-default" href="/#/channels/{{ channelList.id }}">详情</a>
+            <a class="btn btn-sm btn-default" ng-click="editList(channelList)">编辑</a>
+            <button class="btn btn-sm btn-danger" ng-click="deleteList(channelList)">删除</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="btn-group" role="group" aria-label="...">
+    <button type="button" class="btn btn-success" ng-click="createList()">Create channel-list</button>
+  </div>
+</div>
+
+<div class="modal fade" id="createChannelListModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabelC">Create channel-list</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="name" class="control-label">Name:</label>
+            <input type="text" class="form-control" id="nameC" ng-model="channelList.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" ng-click="createList(channelList)">Create channel-list</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="editChannelListModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabel">Edit channel-list</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="name" class="control-label">Name:</label>
+            <input type="text" class="form-control" id="name" ng-model="channelList.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" ng-click="updateList(channelList)">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,82 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+<!--  <ol class="breadcrumb">
+      <li class="active">应用</li>
+  </ol>
+    -->
+  <table class="table table-hover color-l">
+    <thead class="bg-m-grey font-16">
+      <th>AppEUI</th>
+      <th>Name</th>
+      <th class="text-right">Actions</th>
+    </thead>
+    <tbody class="bg-d-grey cd">
+      <tr ng-repeat="app in apps">
+        <td>{{ app.appEUI }}</td>
+        <td>{{ app.name }}</td>
+        <td class="text-right">
+          <a class="btn btn-sm btn-default" href="#/applications/{{app.appEUI}}">节点</a>
+          <button class="btn btn-sm btn-primary" ng-click="editApplication(app)">编辑</button>
+          <button class="btn btn-sm btn-danger" ng-click="deleteApplication(app)">删除</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="btn-group" role="group" aria-label="...">
+    <button type="button" class="btn btn-success" ng-click="pop()">创建应用</button>
+  </div>
+</div>
+
+<div class="modal fade" id="editApplicationModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabel">Edit:{{ app.appEUI }}</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="name" class="control-label">Name:</label>
+            <input type="text" class="form-control" id="name" ng-model="app.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="updateApplication(app)">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="createModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="myModalLabelC">创建应用</h4>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="name" class="control-label">AppEUI:</label>
+            <input type="text" class="form-control" id="nameEUI" ng-model="app.appEUI">
+          </div>
+          <div class="form-group">
+            <label for="name" class="control-label">Name:</label>
+            <input type="text" class="form-control" id="nameC" ng-model="app.name">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <div class="pull-left text-danger" ng-if="error">{{ error }}</div>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" ng-click="createApplication(app)">创建</button>
+      </div>
+    </div>
+  </div>
+</div>

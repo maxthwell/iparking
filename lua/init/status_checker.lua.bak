@@ -1,0 +1,1107 @@
+--event table
+--device int not null default 0
+--		0-gateway,1-node,2-server
+--type int not null default 0
+--		0-bootUp,1-shutdown;	20-offline,21-online;	40-idle,41-busy;	60-UpDataLost,61-downDataLost;  80-lorserverStop,81-loraserverRunning
+--level int  not null default 0
+--		0-none:忽略
+--		1-min:小事件，可提醒
+--		2-normal:正常事件，提醒
+--		3-strong:大事件，警号
+--		4-critical:紧急事件,高级别警告
+
+local delay = 1  -- in seconds
+local delaysendinfo = 7200  -- in seconds
+local deay10Second = 1
+local new_timer = ngx.timer.at
+local log = ngx.log
+local ERR = ngx.ERR
+local check
+local emailSender = require("email_send")
+local loraserverlib = require("loraserverlib")
+
+local node_data_up_listener_connected = false
+local node_data_up_listen_timestamp  =0
+local node_data_up_tab = {}
+local node_data_up_tab_size = 0
+local pgNotifyListener = nil
+local pgNotifyListenerInstance = nil
+local gatewayNetworkDelayThreshold  = 100 --ms
+local gatewayNetworkDelayDetectCount = 4
+
+--记录为事件的最小丢包数，邮件提醒的最小丢包数
+local nodeUpDatalossEventMin = 1
+local nodeUpDatalossEmailMin = 3
+
+local loraserverProcessName = "loraserver"
+
+local receiver = {"<yan.weixin@guodongiot.com>","<gu.qinghuan@guodongiot.com>","<xie.jiushi@guodongiot.com>","<tu.xiaopeng@guodongiot.com>"}
+
+
+local function sendEventInMail(title,deviceId,time_s,isOnline)
+	local status, apps = db_query.gateway_get_with_background(deviceId)
+	--comm_func.do_dump_value(apps,0)
+	if status == true then
+		--comm_func.do_dump_value("true",0)
+		--comm_func.do_dump_value(apps[1]["id"],0)
+		--comm_func.do_dump_value(deviceId,0)
+		if apps ~= nil and apps[1] ~= nil and apps[1]["time"] then
+			if apps[1]["id"] ==  deviceId then
+				local content = "网关状态:\n"
+				if apps[1]["id"] ~= nil then
+					content = content.."id:"..apps[1]["id"].."\n"
+				end
+				if apps[1]["name"] ~= nil then
+					content = content.."名字:"..apps[1]["name"].."\n"
+				end
+				if apps[1]["vendor"] ~= nil then
+					content = content.."厂家:"..apps[1]["vendor"].."\n"
+				end
+				if apps[1]["version"] ~= nil then
+					content = content.."版本:"..apps[1]["version"].."\n"
+				end
+				if apps[1]["bootUpTime"] ~= nil then
+					content = content.."开机时间:"..apps[1]["bootUpTime"].."\n"
+				end
+				if apps[1]["time"] ~= nil then
+					content = content.."最近心跳时间:"..apps[1]["time"].."\n"
+				end
+				--if apps[1]["isOnline"] ~= nil then
+				if isOnline ~= nil then
+					--if apps[1]["isOnline"] then
+					if isOnline == true then
+						content = content.."状态:在线\n"
+					else
+						content = content.."状态:离线!!!!\n"
+					end
+				end
+				if apps[1]["locationaddr"] ~= nil then
+					content = content.."地址:"..apps[1]["locationaddr"].."\n"
+				end
+				if apps[1]["latitude"] ~= nil then
+					if string.byte(apps[1]["latitude"]) ==  45 then
+						content = content.."南维:"..apps[1]["latitude"].."\n"
+					else
+						content = content.."北维:"..apps[1]["latitude"].."\n"
+					end
+				end
+				if apps[1]["longitude"] ~= nil then
+					if string.byte(apps[1]["longitude"]) ==  45 then
+						content = content.."西经:"..apps[1]["longitude"].."\n"
+					else
+						content = content.."东经:"..apps[1]["longitude"].."\n"
+					end
+				end
+				if apps[1]["altitude"] ~= nil then
+					content = content.."海拔:"..apps[1]["altitude"].."\n"
+				end
+                                
+                                local status_sms, apps_alarm = db_query.node_getAllAlarmMail()
+                                local all_mail_addr = {}
+                                if status_sms == true then
+                                        local left_sign = "<"
+                                        local right_sign = ">"
+                                        local t = 0
+                                        for k, v in pairs(apps_alarm) do
+                                                t = t + 1
+                                                mail_addr = left_sign..apps_alarm[k]["addr"]..right_sign
+                                                all_mail_addr[t] = mail_addr
+                                        end
+                                        log(ERR, "gateway alarm,get mail address success",all_mail_addr[t],"  ID:  ",apps[1]["id"],"type",title)
+                                else
+                                        log(ERR, "in gateway alarm,get mail address failed","  ID:  ",apps[1]["id"],"type",title)
+                                end
+				local r,e = emailSender.sendEmail(all_mail_addr,title,content)
+				--comm_func.do_dump_value(r,0)
+				return
+			end
+		end
+	end
+end
+
+
+local function nodeStatusCheck(red)
+	local nodesSession = red:keys("node_session_*")
+	local lossDataNodes = nil 
+	local lossDataNodesDevEUI = nil
+	--comm_func.do_dump_value("nodeStatusCheck",0)
+	if nodesSession ~= nil then 
+		for k, v in pairs(nodesSession) do 
+			if type(v) == "string" and string.len(v) == 21 then
+				local nodeSession = red:get(v)
+				if nodeSession ~= nil then
+					nodeSession = cjson.decode(nodeSession)
+				end
+				
+				if nodeSession ~= nil and nodeSession["devAddr"] ~= nil and nodeSession["fCnt"] ~= nil and nodeSession["fCntUp"] ~= nil then
+					local nodeStatic = red:hget("nodes_data_static",nodeSession["devAddr"])
+					local isNeedSave = true
+					
+					if nodeStatic ~= nil  and nodeStatic["fCnt"] ~= nil and nodeStatic["fCntUp"] ~= nil then
+						nodeStatic = cjson.decode(nodeStatic)
+						if nodeStatic["fCntUp"] == nodeSession["fCntUp"] and nodeStatic["fCntDown"] == nodeSession["fCntDown"] and nodeStatic["fCnt"] == nodeSession["fCnt"] then
+							isNeedSave = false
+						else
+							if nodeSession["fCnt"] - nodeSession["fCntUp"]  > nodeStatic["fCnt"] - nodeStatic["fCntUp"] then
+								if lossDataNodes == nil then
+									lossDataNodes = {}
+								end
+								lossDataNodes[nodeSession["devEUI"]] = nodeSession["fCnt"] - nodeSession["fCntUp"] - nodeStatic["fCnt"] + nodeStatic["fCntUp"]
+								if lossDataNodesDevEUI == nil then
+									lossDataNodesDevEUI = "'\\x"..nodeSession["devEUI"].."'"
+								else
+									lossDataNodesDevEUI = lossDataNodesDevEUI..",'\\x"..nodeSession["devEUI"].."'"
+								end
+							end
+						end
+					end
+					
+					
+					if isNeedSave then
+						local staticStr = "{\"fCntUp\":"..nodeSession["fCntUp"]..",\"fCntDown\":"..nodeSession["fCntDown"]..",\"fCnt\":"..nodeSession["fCnt"].."}"
+						red:hset("nodes_data_static",nodeSession["devAddr"],staticStr)
+					end
+				end
+				
+			end
+		end
+	end
+	--comm_func.do_dump_value(lossDataNodes,0)
+	--comm_func.do_dump_value(lossDataNodesDevEUI,0)
+	
+	if lossDataNodes ~= nil then
+		local status, apps = db_query.node_get_userinfo_with_background("( "..lossDataNodesDevEUI.." )")
+		--comm_func.do_dump_value(apps,0)
+		if status == true then
+			local userId = -1
+			local appEUI = nil
+			local companyInfo = ""
+			local appInfo = ""
+			local nodeInfo = ""
+			local contentInfo = ""
+			local isNeedEmail = false
+			
+			for k, v in pairs(apps) do 
+				if userId ~= apps[k]["user_id"] then
+					contentInfo = contentInfo..companyInfo..nodeInfo..appInfo
+
+					userId = apps[k]["user_id"]
+					if apps[k]["company"] ~= nil then
+						companyInfo = "用户："..apps[k]["company"]
+					end
+					if apps[k]["mail"] ~= nil then
+						companyInfo = companyInfo.."，邮箱："..apps[k]["mail"]
+					end
+					if apps[k]["phone"] ~= nil then
+						companyInfo = companyInfo.."，电话："..apps[k]["phone"]
+					end
+					nodeInfo = ""
+					appInfo = ""
+				end
+				
+				if apps[k]["appEUI"] == nil or string.len(apps[k]["appEUI"]) < 1 then
+					if nodeInfo == nil or string.len(appInfo) == 0 then
+						nodeInfo = "----节点，上行丢包数\n"
+					end
+					nodeInfo = "----"..nodeInfo..apps[k]["devEUI"]..","..lossDataNodes[apps[k]["devEUI"]].."\n"
+				else
+					if appEUI ~= apps[k]["appEUI"] then
+						appEUI = apps[k]["appEUI"]
+						if string.len(appInfo) < 1 then
+							appInfo = "----节点，上行丢包数\n"
+						end
+						if apps[k]["app_name"]~= nil then
+							appInfo = appInfo.."--应用："..apps[k]["app_name"].."，APP_EUI："..apps[k]["appEUI"].."\n"
+						else
+							appInfo = appInfo.."--应用：".."空".."，APP_EUI："..apps[k]["appEUI"].."\n"
+						end
+					end
+					appInfo = appInfo.."----"..apps[k]["devEUI"]..","..lossDataNodes[apps[k]["devEUI"]].."\n"
+				end
+				if lossDataNodes[apps[k]["devEUI"]] >= nodeUpDatalossEventMin then
+					--device,deviceId,eventType,level,time_s,describe
+					local res = db_query.add_event_with_background(1,apps[k]["devEUI"],60,2,tostring(ngx.now() - 2),"loss data count:"..lossDataNodes[apps[k]["devEUI"]])
+				end
+				if lossDataNodes[apps[k]["devEUI"]] >= nodeUpDatalossEmailMin then
+					isNeedEmail = true
+				end
+			end
+						
+			contentInfo = contentInfo..companyInfo..nodeInfo..appInfo
+			--comm_func.do_dump_value(contentInfo,0)
+			if isNeedEmail and string.len(contentInfo) > 0 then
+				local r,e = emailSender.sendEmail(receiver,"国动IOT-事件-紧急-节点丢包",contentInfo)
+			end
+		end
+	end
+end
+
+local function getHostIp(hostInfo)
+	local ipStr = nil
+		
+	local startIndex,endIndex = string.find(hostInfo,"eth1")
+	if type(startIndex) == "number" and type(endIndex) == "number" then
+		local subStr = string.sub(hostInfo,startIndex,string.len(hostInfo))
+		startIndex,endIndex = string.find(subStr,"inet addr:")
+		local strChar = nil
+		ipStr = ""
+		if type(startIndex) == "number" and type(endIndex) == "number" then
+			for i = 1,15,1 do
+				strChar = string.sub(subStr,endIndex +i,endIndex +i)
+				if strChar >= "0" and strChar <= "9" then
+					ipStr = ipStr..strChar
+				elseif strChar == "." then
+					ipStr = ipStr..strChar
+				end
+			end
+		end
+	end
+	return ipStr
+end
+local function loraserverStatusCheck(red)
+	local loraserverPid ,hostInfo= loraserverlib.getPid(loraserverProcessName)
+	if loraserverPid ~= nil and hostInfo ~= nil then
+		local isRunning = red:hget("loraserver_info","is_running")
+		
+		if isRunning == nil  then
+			if loraserverPid > 0 then
+				red:hset("loraserver_info","is_running","true")
+			else
+				red:hset("loraserver_info","is_running","false")
+			end
+		else
+			if loraserverPid < 0 and string.len(hostInfo) > 0 and isRunning == "true" then
+				red:hset("loraserver_info","is_running",false)
+				local ipStr  = getHostIp(hostInfo)
+				local res = db_query.add_event_with_background(2,ipStr,80,4,tostring(ngx.now() - 2),hostInfo)
+				
+				local r,e = emailSender.sendEmail(receiver,"国动IOT-事件-紧急-loraserver停止",ipStr.."\n\n"..hostInfo)
+			elseif loraserverPid > 0 and  isRunning == "false" then
+				hostInfo = loraserverlib.getHostInfo()
+				if hostInfo ~= nil then
+					red:hset("loraserver_info","is_running",true)
+					local ipStr  = getHostIp(hostInfo)
+					local res = db_query.add_event_with_background(2,ipStr,81,2,tostring(ngx.now() - 2),hostInfo)
+					
+					local r,e = emailSender.sendEmail(receiver,"国动IOT-事件-正常-loraserver运行",ipStr.."\n\n"..hostInfo)
+				end
+			end
+		end
+	end
+
+end
+--[==[
+statistic app_eui data count
+
+
+
+]==]---
+local function node_data_up_pop(red)
+	local nodedata = nil
+	local err = true
+	nodedata, err = red:lpop("node_data_up_statistic_list")
+	while not err and nodedata ~= nil do
+		--comm_func.do_dump_value(nodedata,0)
+		--comm_func.do_dump_value("node_data_up_tab_size:"..tostring(node_data_up_tab_size),0)
+		local dataUp  = cjson.decode(nodedata)
+		if dataUp["dev_eui"] ~= nil then
+			if node_data_up_tab[dataUp["dev_eui"]] == nil then
+				node_data_up_tab_size = node_data_up_tab_size + 1
+				comm_func.do_dump_value("node_data_up_tab_size:"..tostring(node_data_up_tab_size),0)
+				dataUp["cache_count"] = 1
+			else
+				dataUp["cache_count"] = node_data_up_tab[dataUp["dev_eui"]] ["cache_count"] + 1
+			end
+			node_data_up_tab[dataUp["dev_eui"]] = comm_func.table_clone(dataUp)
+			
+			if node_data_up_listen_timestamp == 0 then
+				node_data_up_listen_timestamp = ngx.now()
+			end
+		end
+		nodedata, err = red:lpop("node_data_up_statistic_list")
+	end
+end
+local function node_data_up_check(red)
+	node_data_up_pop(red)
+	
+	if (node_data_up_listen_timestamp  > 0 and ngx.now() - node_data_up_listen_timestamp > 600 ) or node_data_up_tab_size > 100000 then
+		----update status to 
+		if node_data_up_tab_size > 0 then
+			local tempDevEuisTab = {}
+			local tempDevEuisTabIndex = 1
+			local tempDevEuis  = ""
+			for k,v in pairs(node_data_up_tab) do
+				tempDevEuisTab[tempDevEuisTabIndex] = "'"..k.."'"
+				tempDevEuisTabIndex = tempDevEuisTabIndex + 1
+			end
+			tempDevEuis = table.concat(tempDevEuisTab,",")
+			 --comm_func.do_dump_value(tempDevEuis,0)
+			local status ,resultBody = db_query.get_node_data_static_with_background(tempDevEuis)
+			
+			if status == true then
+				local appEUIDataCountTab = {}
+				local allDataCount = 0
+				 --comm_func.do_dump_value(resultBody,0)
+				for k,v in pairs(resultBody) do
+					local temp_dev_eui = "\\x"..v["dev_eui"]
+					local temp_time_s_int   = v["databigint1"]
+					local temp_lose_up_count = v["lose_up_count"]  
+					local temp_lose_up_base_count = v["lose_up_base_count"]
+					--comm_func.do_dump_value(v,0)
+					--comm_func.do_dump_value(node_data_up_tab,0)
+					local temp_new_fcnt_up_node = node_data_up_tab[temp_dev_eui]["fcnt_up_node"]
+					local temp_new_fcnt_up_server = node_data_up_tab[temp_dev_eui]["fcnt_up_server"]
+
+					
+					local tem_app_eui = "\\x"..node_data_up_tab[temp_dev_eui]["reserve2"]
+					local tem_user_id = node_data_up_tab[temp_dev_eui]["reserve3"]
+					local temp_now_time = math.floor(ngx.now())
+					
+					local temp_now_int = temp_now_time - math.mod(temp_now_time,86400)
+					
+					if temp_time_s_int >= temp_now_int   then
+						if temp_new_fcnt_up_node > 0 and temp_new_fcnt_up_server > 0 and temp_new_fcnt_up_node >= temp_new_fcnt_up_server then
+							if  temp_lose_up_base_count < temp_new_fcnt_up_node - temp_new_fcnt_up_server then
+								temp_lose_up_count =  temp_lose_up_count + temp_new_fcnt_up_node - temp_new_fcnt_up_server -  temp_lose_up_base_count
+								if temp_lose_up_count < 0 then
+									temp_lose_up_count = 0
+								end
+								temp_lose_up_base_count = temp_new_fcnt_up_node - temp_new_fcnt_up_server
+							end
+						end
+						db_query.update_node_data_static_with_background(" up_count=up_count+"..tostring(node_data_up_tab[temp_dev_eui]["cache_count"]).." , lose_up_count="..tostring(temp_lose_up_count)..",lose_up_base_count="..tostring(temp_lose_up_base_count),"dev_eui = '"..temp_dev_eui.."' ")
+					else
+						if temp_new_fcnt_up_node > 0 and temp_new_fcnt_up_server > 0 and temp_new_fcnt_up_node >= temp_new_fcnt_up_server then
+							if  temp_lose_up_base_count < temp_new_fcnt_up_node - temp_new_fcnt_up_server then
+								temp_lose_up_count =  temp_new_fcnt_up_node - temp_new_fcnt_up_server  - temp_lose_up_base_count
+								temp_lose_up_base_count = temp_new_fcnt_up_node - temp_new_fcnt_up_server
+							else
+								temp_lose_up_count = 0
+							end
+						end
+
+						db_query.update_node_data_static_with_background(" up_count=1 , lose_up_count="..tostring(temp_lose_up_count)..", lose_up_base_count="..tostring(temp_lose_up_base_count)..", databigint1="..tostring(temp_now_int),"dev_eui = '"..temp_dev_eui.."' ")
+					end
+					
+					if appEUIDataCountTab[tem_app_eui] == nil then
+						local tempAppCount = {}
+						tempAppCount["user_id"] = tem_user_id
+						tempAppCount["cache_count"] = node_data_up_tab[temp_dev_eui]["cache_count"]
+						appEUIDataCountTab[tem_app_eui] = tempAppCount
+					else
+						appEUIDataCountTab[tem_app_eui]["cache_count"]  = appEUIDataCountTab[tem_app_eui]["cache_count"] + node_data_up_tab[temp_dev_eui]["cache_count"]
+					end
+					allDataCount = allDataCount + node_data_up_tab[temp_dev_eui]["cache_count"]
+					node_data_up_tab[temp_dev_eui] = nil
+				end
+				
+				for k,v in pairs(node_data_up_tab) do
+					local temp_dev_eui = "\\x"..v["dev_eui"]
+					
+					local temp_new_fcnt_up_node = node_data_up_tab[temp_dev_eui]["fcnt_up_node"]
+					local temp_new_fcnt_up_server = node_data_up_tab[temp_dev_eui]["fcnt_up_server"]
+
+					
+					local tem_app_eui = "\\x"..node_data_up_tab[temp_dev_eui]["reserve2"]
+					local tem_user_id = node_data_up_tab[temp_dev_eui]["reserve3"]
+					local temp_now_time = math.floor(ngx.now())
+					
+					local temp_now_int = temp_now_time - math.mod(temp_now_time,86400)
+					
+					db_query.insert_node_data_static_with_background("(dev_eui, app_eui, user_id,up_count,lose_up_count,lose_up_base_count,databigint1) values ('"..temp_dev_eui.."','"..tem_app_eui.."',"..tostring(tem_user_id)..","..tostring(v["cache_count"])..",0,"..tostring(temp_new_fcnt_up_node - temp_new_fcnt_up_server)..","..tostring(temp_now_int)..") ")
+				end
+				
+				
+				if allDataCount > 0 then 
+					local tempAppEuisTab = {}
+					local tempAppEuisTabIndex = 1
+					local tempAppEuis  = ""
+					for k,v in pairs(appEUIDataCountTab) do
+						tempAppEuisTab[tempAppEuisTabIndex] = "'"..k.."'"
+						tempAppEuisTabIndex = tempAppEuisTabIndex + 1
+					end
+					tempAppEuis = table.concat(tempAppEuisTab,",")
+					local status ,resultBody = db_query.get_user_data_from_appeui_static_with_background(tempAppEuis)
+					
+					if status == true then
+						for k,v in pairs(resultBody) do
+							local tempAppEUI = "\\x"..v["app_eui"]
+							db_query.update_user_data_static_with_background("up_total_count=up_total_count+"..tostring(appEUIDataCountTab[tempAppEUI]["cache_count"])..",user_id="..tostring(appEUIDataCountTab[tempAppEUI]["user_id"]),"app_eui ='"..tempAppEUI.."'")
+							appEUIDataCountTab[tempAppEUI] = nil
+						end
+					end
+					
+					for k,v in pairs(appEUIDataCountTab) do
+						local tempAppEUI = k
+						db_query.insert_user_data_static_with_background("(app_eui, user_id, down_total_count,up_total_count) values ('"..k.."',"..tostring(v["user_id"])..",0,"..tostring(appEUIDataCountTab[tempAppEUI]["cache_count"])..") ")
+					end
+
+					--db_query.update_all_data_static_with_background("up_total_count=up_total_count+"..tostring(allDataCount))
+				end
+
+			end
+		end
+		
+		
+		
+		
+		
+		
+		node_data_up_listen_timestamp = 0
+		node_data_up_tab_size = 1
+		node_data_up_tab = {}
+	end
+end
+
+local function statistic_all_app_data_count(red)
+	local statisticsDay = red:get("user_data_static_day")
+	local currentTimestamp = math.ceil(ngx.now())
+	local todayStr =  os.date("%Y-%m-%d",currentTimestamp + 600)
+	
+	if true then
+		if todayStr ~= statisticsDay then
+			red:set("user_data_static_day",todayStr)
+			local nowDayTime =  os.date("%Y-%m-%d",currentTimestamp)
+			local temp_now_time = math.floor(ngx.now())
+			local temp_now_int = temp_now_time - math.mod(temp_now_time,86400)
+			local status, apps = db_query.get_user_data_static_with_background()
+			local nodeStatistisStatus,nodeStatistisApprovedApps,nodeStatistisActivedApps = db_query.get_user_node_static_with_background(temp_now_int)
+			if status == true and nodeStatistisStatus == true then
+				for k,v in pairs(apps) do
+					local app_eui  = v["app_eui"]
+					local app_euiStr =  comm_func.to_hex(app_eui)
+					local newTab = {}
+					
+					
+					local yesterdayTab =  red:hget("user_data_yesterday_count",app_euiStr)
+					if yesterdayTab ~= nil then
+						yesterdayTab = cjson.decode(yesterdayTab)
+						newTab = comm_func.table_clone(yesterdayTab)
+					else
+						newTab["approvedcount"] = 0
+						newTab["activecount"] = 0
+						newTab["approvedcount_tmst"] = temp_now_int
+						newTab["activecount_tmst"] = temp_now_int
+					end
+					newTab["down_total_count"] = v["down_total_count"]
+					newTab["up_total_count"] = v["up_total_count"]
+					
+					--comm_func.do_dump_value(yesterdayTab,0)
+					local user_id = v["user_id"]
+					local up_count = 0
+					local down_count = 0
+					local approvedcount = 0
+					local activecount = 0
+					
+					if yesterdayTab ~= nil then
+						up_count = v["up_total_count"] - yesterdayTab["up_total_count"]
+						down_count = v["down_total_count"] - yesterdayTab["down_total_count"]
+					else
+						up_count = v["up_total_count"] 
+						down_count = v["down_total_count"]
+					end
+					
+					for approK,approV in pairs(nodeStatistisApprovedApps) do
+						if app_eui == approV["app_eui"]  then
+							if yesterdayTab ~= nil then
+								if yesterdayTab["approvedcount_tmst"] ~= nil and temp_now_int - yesterdayTab["approvedcount_tmst"] == 86400 then
+									approvedcount = approV["approvedcount"] - yesterdayTab["approvedcount"]
+								else
+									approvedcount = approV["approvedcount"] 
+								end
+							else
+								approvedcount = approV["approvedcount"] 
+							end
+							newTab["approvedcount"] = approV["approvedcount"]
+							newTab["approvedcount_tmst"] = temp_now_int
+							break
+						end
+					end
+					
+					for activK,activV in pairs(nodeStatistisActivedApps) do
+						if app_eui == activV["app_eui"] then
+							if yesterdayTab ~= nil then
+								if yesterdayTab["activecount_tmst"] ~= nil and temp_now_int - yesterdayTab["activecount_tmst"]  == 86400 then
+									activecount = activV["activecount"] - yesterdayTab["activecount"]
+								else
+									activecount = activV["activecount"]
+								end
+							else
+								activecount = activV["activecount"]
+							end
+							newTab["activecount"] = activV["activecount"]
+							newTab["activecount_tmst"] = temp_now_int
+							break
+						end
+					end
+					if approvedcount < 0 then
+						approvedcount = 0
+					end
+					if activecount < 0 then
+						activecount = 0
+					end
+					if up_count < 0 then
+						up_count = 0
+					end
+					if down_count < 0 then
+						down_count = 0
+					end
+					
+					if newTab["approvedcount"] < 0 then
+						newTab["approvedcount"] = 0
+					end
+					if newTab["activecount"] < 0 then
+						newTab["activecount"] = 0
+					end
+					if newTab["up_total_count"] < 0 then
+						newTab["up_total_count"] = 0
+					end
+					if newTab["down_total_count"] < 0 then
+						newTab["down_total_count"] = 0
+					end
+
+					red:hset("user_data_yesterday_count",app_euiStr,cjson.encode(newTab))
+					
+					db_query.save_today_user_statistis_info(nowDayTime,user_id,app_euiStr,approvedcount,activecount,up_count,down_count)
+					
+				end
+			end
+			
+		end
+	end
+end
+
+
+local function generate_nodeinfo_file_email_to_user(red)
+	local nodeInfo =  red:lrange("devaddr_apply_approve_nodeinfo_list",0,0)
+	
+	while (nodeInfo ~= nil and nodeInfo[1] ~= nil)
+	do
+		local nodeInfoTab = cjson.decode(nodeInfo[1])
+		if nodeInfoTab ~= nil then
+			local nodeListFileName = db_query.gen_nodelist_file_for_user_apply_with_background(nodeInfoTab["user_id"],nodeInfoTab["apply_time"],nodeInfoTab["apply_num"],nodeInfoTab["app_eui"],nodeInfoTab["start_dev_eui"],nodeInfoTab["end_dev_eui"],nodeInfoTab["node_approved_dir"],nodeInfoTab["join_type"],nodeInfoTab["work_mode"],nodeInfoTab["encryption"])
+			--comm_func.do_dump_value(nodeListFileName,0)
+			local filePath = nodeInfoTab["node_approved_dir"]..nodeListFileName
+			local newFile,encryptKey =  comm_func.encrypt_file_to_gzip(filePath)
+			if newFile ~= nil and encryptKey ~= nil then
+				--comm_func.do_dump_value(newFile,0)
+				--comm_func.do_dump_value(encryptKey,0)
+				local url = comm_func.upload_file_to_cdn(newFile,nodeListFileName..".zip")
+				--comm_func.do_dump_value(url,0)
+				status, apps = db_query.User_getUserInfo_with_background(tostring(nodeInfoTab["user_id"]))
+				--comm_func.do_dump_value(apps,0)
+				if url ~= nil and status == true and apps ~= nil and apps[1] ~= nil and apps[1]["mail"] ~= nil then
+					local receiver = {"<"..apps[1]["mail"]..">"}
+
+					local r,e = emailSender.sendEmail(receiver,"国动IOT-节点申请成功","尊敬的用户："..apps[1]["company"].."\n    您于"..os.date("%Y-%m-%d %H:%M:%S",tonumber(apply_time)).."申请的节点已经被审批通过，链接为您申请节点的详情："..url.."，解压密码："..encryptKey.."，请您妥善保存以免数据泄露！")
+					if not r then
+						comm_func.do_dump_value(e,0)
+						nodeInfo = nil
+						break
+					else
+						red:lpop("devaddr_apply_approve_nodeinfo_list")
+						ngx.sleep(1)
+						nodeInfo =  red:lrange("devaddr_apply_approve_nodeinfo_list",0,0)
+					end
+				else
+					comm_func.do_dump_value("get user info fail!",0)
+					nodeInfo = nil
+					break
+				end
+			else
+				comm_func.do_dump_value("generate encrpty file fail!",0)
+				nodeInfo = nil
+				break
+			end
+		
+		end
+	end
+end
+local function save_node_data_down_to_db(red)
+	local nodeDataDown = red:lpop("node_data_down_list")
+	local nodeDataDownBeforeDevEUi = nil
+	local nodeDataDownBeforeTime = nil
+	local saveDBCount = 0
+	while nodeDataDown ~= nil do
+		local nodeDataDownTable = cjson.decode(nodeDataDown)
+		if nodeDataDownTable ~= nil then
+			if nodeDataDownBeforeDevEUi == nodeDataDownTable["devEUI"] and nodeDataDownBeforeTime == nodeDataDownTable["nowTime"] then
+				nodeDataDownTable["nowTime"] = nodeDataDownTable["nowTime"] + 0.00001
+			end
+			if nodeDataDownTable["appEUI"] ~= nil then
+				local saveRes,saveApps = db_query.save_down_data_with_background(nodeDataDownTable["devEUI"],nodeDataDownTable["nowTime"],nodeDataDownTable["data"],nodeDataDownTable["appEUI"],nodeDataDownTable["userId"],nodeDataDownTable["type"],nodeDataDownTable["expire_time"],nodeDataDownTable["status"],nodeDataDownTable["task_id"])
+				if true == saveRes  then
+					db_query.update_down_data_counter_with_background(nodeDataDownTable["devEUI"],nodeDataDownTable["nowTime"],nodeDataDownTable["appEUI"],nodeDataDownTable["userId"])
+				end
+			end
+		end
+	
+		nodeDataDownBeforeDevEUi = nodeDataDownTable["devEUI"]
+		nodeDataDownBeforeTime = nodeDataDownTable["nowTime"]
+		saveDBCount = saveDBCount + 1
+		if saveDBCount > 30 then
+			break
+		else
+			nodeDataDown = red:lpop("node_data_down_list")
+		end
+	end
+end
+--
+--networkType
+--1:Ethernet
+--2:SIM
+--
+local function updateGatewayNetworkType(onLineGatewaysTab,networkType)
+	-----ALTER TABLE gateway DISABLE TRIGGER gataway_bootup_time_trigger;
+	if onLineGatewaysTab ~= nil and onLineGatewaysTab[1] ~= nil then
+		local bodyStr  = table.concat(onLineGatewaysTab,",")
+		db_query.gateway_enableOrDisableTrigger_with_background(false)
+		db_query.gateway_updateNetworkkType_with_background(bodyStr,networkType)
+		db_query.gateway_enableOrDisableTrigger_with_background(true)
+	end
+	-----ALTER TABLE gateway ENABLE TRIGGER gataway_bootup_time_trigger;
+end
+
+local function checkGatewayNetwork(red,gatewayCurrentConf,gateway)
+	local eventType = nil
+	local eventLevel  = nil
+	local eventTime = nil
+	local eventDescribe = nil
+	local eventTitle = nil
+	
+	gatewayCurrentConf = cjson.decode(gatewayCurrentConf)
+	if type(gatewayCurrentConf) ~= "table" then
+		gatewayCurrentConf = {}
+		gatewayCurrentConf["time"] = gateway["time"]
+		gatewayCurrentConf["nede"] = gateway["nede"]
+		gatewayCurrentConf["nely"] = gateway["nely"]
+		if gatewayCurrentConf["nede"] ~= nil and gatewayCurrentConf["nede"] > 0 then
+			if gatewayCurrentConf["nely"] >  2*gatewayNetworkDelayThreshold then
+				gatewayCurrentConf["warningCount"] = 1
+			else
+				gatewayCurrentConf["warningCount"] = 0
+			end
+		end
+	else
+		gatewayCurrentConf["time"] = gateway["time"]
+		if gatewayCurrentConf["warningCount"] == nil then
+			gatewayCurrentConf["warningCount"] = 0
+		end	
+		if gatewayCurrentConf["nede"] ~= nil and gateway["nede"] ~= nil and  gatewayCurrentConf["nede"] <  gateway["nede"] then
+			if gateway["nely"] >  2*gatewayNetworkDelayThreshold then
+				if gatewayCurrentConf["warningCount"] <= gatewayNetworkDelayDetectCount then
+						gatewayCurrentConf["warningCount"] = 1 + gatewayCurrentConf["warningCount"]
+				end
+				if gatewayCurrentConf["warningCount"] > gatewayNetworkDelayDetectCount and gatewayCurrentConf["latestEvent"] ~= 22  then
+					------Warning Network delay
+					gatewayCurrentConf["latestEvent"] = 22
+					eventType  = 22
+					eventLevel  = 3
+					eventTime = gateway["time"]
+					eventDescribe = "网关检测时间："..os.date("%Y-%m-%d %H:%M:%S",gateway["nede"]).."，延迟："..(gateway["nely"]/2).."毫秒"
+					eventTitle = "国动IOT-事件-"..db_query.event_get_level_msg(3).."-".."网关网络延迟"
+				end
+			else
+				if gatewayCurrentConf["warningCount"] >  0 then
+					if gatewayCurrentConf["warningCount"] > 0 then
+							gatewayCurrentConf["warningCount"] =  gatewayCurrentConf["warningCount"] - 1
+					end
+					if gatewayCurrentConf["warningCount"] ==  0  and  gatewayCurrentConf["latestEvent"] == 22  then
+						------network OK
+						gatewayCurrentConf["latestEvent"] = 23
+						eventType  = 23
+						eventLevel  = 2
+						eventTime = gateway["time"]
+						eventDescribe = "网关检测时间："..os.date("%Y-%m-%d %H:%M:%S",gateway["nede"]).."，延迟："..(gateway["nely"]/2).."毫秒"
+						eventTitle = "国动IOT-事件-"..db_query.event_get_level_msg(2).."-".."网关网络正常"
+					end
+				end
+			end
+			gatewayCurrentConf["nede"] = gateway["nede"]
+			gatewayCurrentConf["nely"] = gateway["nely"]
+		end
+	end
+	
+	red:hset("on_line_gateways", gateway["id"], cjson.encode(gatewayCurrentConf))
+
+	if eventType ~= nil then
+		db_query.add_event_with_background("0",gateway["id"],eventType,eventLevel,math.ceil(ngx.now()),eventDescribe)
+		local status_sms, apps = db_query.node_getAllAlarmMail()
+		local all_mail_addr = {}
+		if status_sms == true then
+				local left_sign = "<"
+				local right_sign = ">"
+				local t = 0
+				for k, v in pairs(apps) do
+						t = t + 1
+						mail_addr = left_sign..apps[k]["addr"]..right_sign
+						all_mail_addr[t] = mail_addr
+				end
+				log(ERR, "gateway alarm,get mail address success",all_mail_addr[t])
+		else
+				log(ERR, "in gateway alarm,get mail address failed")
+		end
+
+		local status, apps = db_query.gateway_get_with_background(gateway["id"])
+		local content = eventDescribe
+		--comm_func.do_dump_value(apps,0)
+		if status == true and  apps ~= nil and apps[1] ~= nil and apps[1]["time"] then
+			content = content.."\n\n网关状态:\n"
+			if apps[1]["id"] ~= nil then
+				content = content.."id:"..apps[1]["id"].."\n"
+			end
+			if apps[1]["name"] ~= nil then
+				content = content.."名字:"..apps[1]["name"].."\n"
+			end
+			if apps[1]["vendor"] ~= nil then
+				content = content.."厂家:"..apps[1]["vendor"].."\n"
+			end
+			if apps[1]["version"] ~= nil then
+				content = content.."版本:"..apps[1]["version"].."\n"
+			end
+			if apps[1]["bootUpTime"] ~= nil then
+				content = content.."开机时间:"..apps[1]["bootUpTime"].."\n"
+			end
+			if apps[1]["time"] ~= nil then
+				content = content.."最近心跳时间:"..apps[1]["time"].."\n"
+			end
+			--if apps[1]["isOnline"] ~= nil then
+			if isOnline ~= nil then
+				--if apps[1]["isOnline"] then
+				if isOnline == true then
+					content = content.."状态:在线\n"
+				else
+					content = content.."状态:离线!!!!\n"
+				end
+			end
+			if apps[1]["locationaddr"] ~= nil then
+				content = content.."地址:"..apps[1]["locationaddr"].."\n"
+			end
+			if apps[1]["latitude"] ~= nil then
+				if string.byte(apps[1]["latitude"]) ==  45 then
+					content = content.."南维:"..apps[1]["latitude"].."\n"
+				else
+					content = content.."北维:"..apps[1]["latitude"].."\n"
+				end
+			end
+			if apps[1]["longitude"] ~= nil then
+				if string.byte(apps[1]["longitude"]) ==  45 then
+					content = content.."西经:"..apps[1]["longitude"].."\n"
+				else
+					content = content.."东经:"..apps[1]["longitude"].."\n"
+				end
+			end
+			if apps[1]["altitude"] ~= nil then
+				content = content.."海拔:"..apps[1]["altitude"].."\n"
+			end
+		end
+	
+		local cainTable = {}
+		cainTable[0] = "网线是否连接:否\n"
+		cainTable[1] = "网线是否连接:是\n"
+		if gateway["cain"] ~= nil and cainTable[gateway["cain"]] ~= nil then
+			content = content..cainTable[gateway["cain"]]
+		end
+		
+		local typeTable = {}
+		typeTable[0] = "网络类型:无网络\n"
+		typeTable[1] = "网络类型:以太网\n"
+		typeTable[2] = "网络类型:SIM\n"
+		if gateway["type"] ~= nil and typeTable[gateway["type"]] ~= nil then
+			content = content..typeTable[gateway["type"]]
+		end
+		
+		local operTable = {}
+		typeTable[0] = "运营商:移动\n"
+		typeTable[1] = "运营商:联通\n"
+		typeTable[2] = "运营商:电信\n"
+		if gateway["oper"] ~= nil and typeTable[gateway["oper"]] ~= 0 then
+			content = content..typeTable[gateway["oper"]]
+		end
+		
+		local osimsTable = {}
+		osimsTable[0] = "SIM网络:GSM\n"
+		osimsTable[1] = "SIM网络:GPRS\n"
+		osimsTable[2] = "SIM网络:CDMA\n"
+		osimsTable[3] = "SIM网络:EVDO\n"
+		osimsTable[4] = "SIM网络:EHRPD\n"
+		osimsTable[5] = "SIM网络:UTMS\n"
+		osimsTable[6] = "SIM网络:HSDPA\n"
+		osimsTable[7] = "SIM网络:HSUPA\n"
+		osimsTable[8] = "SIM网络:HSPA\n"
+		osimsTable[9] = "SIM网络:HSPA+\n"
+		osimsTable[10] = "SIM网络:LTE\n"
+		if gateway["sims"] ~= nil and osimsTable[gateway["sims"]]  ~= nil then
+			content = content..osimsTable[gateway["sims"]]
+		end
+		
+		if gateway["rssi"] ~= nil then
+			content = content.."SIM信号强度:"..tostring(gateway["rssi"]).."\n"
+		end
+		
+		if gateway["simi"] ~= nil then
+			content = content.."IMSI:"..gateway["simi"].."\n"
+		end
+		
+		local r,e = emailSender.sendEmail(all_mail_addr,eventTitle,content)
+		--comm_func.do_dump_value(r,0)
+	end
+	
+end
+	
+
+--
+--generate websocket event
+--
+--
+--
+local function generateWebsocketEvent(red)
+	local eventDetail = red:lpop("websocket_event_list")
+
+	while eventDetail ~= nil do
+		local eventTab = cjson.decode(eventDetail)
+		
+		if eventTab ~= nil then
+			db_query.add_event_with_background(eventTab["device"],eventTab["device_id"],eventTab["type"],eventTab["level"],eventTab["time_s"],eventTab["describe"])
+			if eventTab["client_mail"]  ~= nil then
+				local title = "国动IOT-事件-"..db_query.event_get_level_msg(eventTab["level"]).."-"
+				content = "您的应用appEUI:"..eventTab["device_id"].."，于"..os.date("%Y-%m-%d %H:%M:%S",eventTab["time_s"])
+				if eventTab["type"] == 150 then
+					title = title.."websocket上线"
+					content = content.."websocket上线"
+				elseif eventTab["type"] == 151 then
+					title = title.."websocket异地上线"
+					content = content.."websocket异地上线，登录ip为："..eventTab["ip"].."，请您及时查证并更新userSec后重新连接"
+				elseif eventTab["type"] == 152 then
+					title = title.."websocket掉线"
+					content = content.."websocket掉线"
+				end
+				local r,e = emailSender.sendEmail({"<"..eventTab["client_mail"]..">"},title,content)
+			end
+		end
+		
+		eventDetail = red:lpop("websocket_event_list")
+	end
+end
+local function checkGatewayAll(red)
+	--gate status checker
+	local gateways = red:hkeys("gateways")
+	if gateways ~= nil then 
+		local gatewayOnSimTab = {}
+		local gatewayOnSimTabIndex = 1
+		local gatewayOnEthernetTab = {}
+		local gatewayOnEthernetTabIndex = 1
+		
+		
+		for k, v in pairs(gateways) do 
+			local gatewaySenssion = red:hget("gateways",v)
+			local nowTime = ngx.now()
+			if gatewaySenssion ~= nil then
+				local gateway = cjson.decode(gatewaySenssion)
+				local gateTime = tonumber(gateway["time"])
+				if gateTime ~= nil then
+					if nowTime - gateTime < 60 and  gateway["type"]  ~= nil  then
+						if gateway["type"] == 2 or gateway["type"] == "2" then
+							gatewayOnSimTab[gatewayOnSimTabIndex] = "'\\x"..gateway["id"].."'"
+							gatewayOnSimTabIndex = gatewayOnSimTabIndex + 1
+						elseif gateway["type"] == 1 or gateway["type"] == "1" then
+							gatewayOnEthernetTab[gatewayOnEthernetTabIndex] = "'\\x"..gateway["id"].."'"
+							gatewayOnEthernetTabIndex = gatewayOnEthernetTabIndex + 1
+						end
+						
+						if gatewayOnSimTabIndex > 1000 then
+							updateGatewayNetworkType(gatewayOnSimTab,"2")
+							gatewayOnSimTabIndex = 1
+							gatewayOnSimTab = {}
+						end
+						if gatewayOnEthernetTabIndex > 1000 then
+							updateGatewayNetworkType(gatewayOnEthernetTab,"1")
+							gatewayOnEthernetTabIndex = 1
+							gatewayOnEthernetTab = {}
+						end
+					end
+					if nowTime - gateTime > 60 and red:hget("off_line_gateways", gateway["id"]) == nil then
+						red:hset("off_line_gateways", gateway["id"], gateway["time"])
+						red:hdel("on_line_gateways",gateway["id"])
+						local res = db_query.add_event_with_background(0,gateway["id"],20,4,gateway["time"],"gateway offline")
+												  
+						--websocket push event to server
+						sendEventInMail("国动IOT-事件-紧急-网关掉线",gateway["id"],gateway["time"],false)
+
+                                                            local status_sms, apps = db_query.node_getAllAlarmSms()
+                                                            if status_sms == true then
+                                                        local ok, err = ngx.timer.at(240, offDelayTimeSendSMS, gateway, apps)
+                                                                    if not ok then
+                                                                             log(ERR, "failed to create timer: ", err)
+                                                                             return
+                                                                    end
+																
+                                                            else
+                                                                    log(ERR, "in gateway alarm,get sms address failed")
+                                                            end
+
+					elseif nowTime - gateTime < 60  then
+						local gatewayCurrentConf =  red:hget("on_line_gateways", gateway["id"])
+						if  gatewayCurrentConf == nil then
+							--red:hset("on_line_gateways", gateway["id"], gateway["time"])
+							checkGatewayNetwork(red,gatewayCurrentConf,gateway)
+							red:hdel("off_line_gateways",gateway["id"])
+							local res = db_query.add_event_with_background(0,gateway["id"],21,2,gateway["time"],"gateway online")
+
+							--websocket push event to server
+							ngx.log(ngx.ERR,"aaaaaaaaaaaa")
+							sendEventInMail("国动IOT-事件-正常-网关上线",gateway["id"],gateway["time"],true)
+                                                            	--local normal_msg = "国动IOT-事件-正常-网关上线"
+                                                            	--local smsCmd = string.format("/usr/bin/python /root/lora/qh/lua/init/sms.py %s %s %s",normal_msg,tostring(gateway["id"]),tostring(gateway["time"]))
+                                                            	--os.execute(smsCmd)
+                                                            	--ngx.log(ngx.ERR, "affected_rows:", normal_msg)
+
+                                                            	local status_sms, apps = db_query.node_getAllAlarmSms()
+                                                            	--comm_func.do_dump_value(apps,0)
+                                                                local off_send_sms_status_by_redis = red:hget("off_send_sms_status",gateway["id"])
+                                                                log(ERR, "in gateway alarm,before judge gateway disconnect more then 5 minutes",'  ID  ',gateway["id"],'  status_sms  ',status_sms, 'off_send_sms_status',off_send_sms_status_by_redis)
+                                                            	if status_sms == true and red:hget("off_send_sms_status",gateway["id"]) == "1" then
+                                                                    	local normal_msg = "国动IOT-事件-正常-网关上线"
+                                                                    	for k, v in pairs(apps) do  
+                                                                            	local smsCmd = string.format("/usr/bin/python /root/lora/js/lua/init/sms.py %s %s %s %s %s %s %s",normal_msg,tostring(gateway["id"]),tostring(gateway["time"]),apps[k]["addr"],tostring(gateway["name"]),tostring(gateway["model"]),tostring(gateway["locationaddr"]))
+                                                                            	os.execute(smsCmd)
+                                                                            	log(ERR, "normal_msg:",normal_msg," gateway id:",tostring(gateway["id"])," gateway time:",tostring(gateway["time"])," addr:",apps[k]["addr"],"off_send_sms_status:",red:hdel("off_send_sms_status",gateway["id"]))
+                                                                     	end
+                                                                    	 red:hdel("off_send_sms_status",gateway["id"])
+                                                            	else
+                                                                    	log(ERR, "in gateway alarm,get sms address failed or gateway is disconnected less then 5 minetes",'  ID  ',gateway["id"])
+                                                            	end
+						else
+							checkGatewayNetwork(red,gatewayCurrentConf,gateway)
+						end
+					end
+				end
+			end
+			
+		end
+
+		
+		if gatewayOnSimTabIndex > 1 then
+			updateGatewayNetworkType(gatewayOnSimTab,"2")
+			gatewayOnSimTabIndex = 1
+			gatewayOnSimTab = {}
+		end
+		if gatewayOnEthernetTabIndex > 1 then
+			updateGatewayNetworkType(gatewayOnEthernetTab,"1")
+			gatewayOnEthernetTabIndex = 1
+			gatewayOnEthernetTab = {}
+		end
+	end
+	--gate status checker
+end
+
+check = function(premature)
+	local red = redis:new()
+	if not premature then
+		deay10Second = deay10Second + 1
+		if deay10Second > 10 then
+			deay10Second = 1
+			-- do the health check or other routine work
+			comm_func.trycall(checkGatewayAll,red)
+			--comm_func.trycall(nodeStatusCheck,red)
+			
+			--server status checker
+			--comm_func.trycall(loraserverStatusCheck,red)
+			
+			--comm_func.trycall(statistic_all_app_data_count,red)
+			
+			--comm_func.trycall(generate_nodeinfo_file_email_to_user,red)
+			
+			comm_func.trycall(save_node_data_down_to_db,red)
+		
+			--comm_func.trycall(node_data_up_check,red)
+			
+			comm_func.trycall(generateWebsocketEvent,red)
+		end
+		
+		
+		local ok, err = new_timer(delay, check)
+		if not ok then
+			 log(ERR, "failed to create timer: ", err)
+			 return
+		end
+
+    end
+end
+
+if ngx.worker.id() == 0 then
+
+local ok, err = ngx.timer.at(delay, check)
+if not ok then
+         log(ERR, "failed to create timer: ", err)
+         return
+end
+
+end
+
+offDelayTimeSendSMS = function(premature, gateway, apps)
+        ngx.log(ngx.ERR, "delay 5 minutes  is ok ....... ")
+        if premature then
+                return
+        end
+        local red = redis:new()
+        if red:hget("on_line_gateways", gateway["id"]) == nil and red:hget("off_send_sms_status",gateway["id"]) == nil then
+                local alarm_msg = "国动IOT-事件-紧急-网关掉线"
+                red:hset("off_send_sms_status", gateway["id"], "1")
+                for k, v in pairs(apps) do
+                        local smsCmd = string.format("/usr/bin/python /root/lora/js/lua/init/sms.py %s %s %s %s %s %s %s",alarm_msg,tostring(gateway["id"]),tostring(gateway["time"]),apps[k]["addr"],tostring(gateway["name"]),tostring(gateway["model"]),tostring(gateway["locationaddr"]))                                                                   
+                        os.execute(smsCmd)
+                        log(ERR, "alarm_msg:",alarm_msg," gateway id:",tostring(gateway["id"])," gateway time:",tostring(gateway["time"])," addr:",apps[k]["addr"])
+                end
+end
+
+end
+
+proctimesendinfo = function(premature)
+	emailSender.sendEmail({"<123@gd-iot.com>"},"hello world","you good")
+	ngx.log(ngx.ERR, "delaysendinfo is ok ....... ")
+	if premature then
+		return
+	end
+	local red = redis:new()
+	local gateways = red:hkeys("gateways")
+	if gateways ~= nil then 
+		local nowTime = ngx.now()
+		for k, v in pairs(gateways) do 
+			local gatewaySenssion = red:hget("gateways",v)
+			--comm_func.do_dump_value(gatewaySenssion,0)
+			if gatewaySenssion ~= nil then
+				local gateway = cjson.decode(gatewaySenssion)
+				local imsi = gateway["simi"]
+				local id = gateway["id"]
+				local name = gateway["name"]
+				local ntime = gateway["time"]
+				local ntype = gateway["type"]
+				if imsi ~= nil and id ~= nil and name ~= nil and ntime ~= nil and ntype ~= nil and string.len(imsi) > 0 then
+					local differtime = os.time() - ntime
+					ngx.log(ngx.ERR, "imsi:"..imsi..",id:"..id..",name:"..name..",ntype:"..ntype..",differtime:"..differtime)
+					if (differtime <= 60 and ntype == 2) then
+						common_http.getDataUserInfo(imsi,id,name);
+						ngx.sleep(1)
+					end
+				end
+			end
+		end
+	end
+			
+	local ok, err = new_timer(delaysendinfo, proctimesendinfo)
+	if not ok then
+	 log(ERR, "failed to create timer: ", err)
+	 return
+	end
+end
+
+if ngx.worker.id() == 0 then
+
+	local ok, err = ngx.timer.at(300, proctimesendinfo)
+	if not ok then
+		log(ERR, "failed to create timer: ", err)
+		return
+	end
+
+end

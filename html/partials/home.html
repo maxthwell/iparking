@@ -1,0 +1,40 @@
+<ng-include src="'partials/navbar.html'"></ng-include>
+
+<div class="container">
+    <div class="row placeholders margin-top-20">
+        <div class="col-xs-6 col-sm-3 col-md-3">
+        <span class="ellipse">{{GYtotal}}</span>
+        <h4>网关数</h4>
+      </div>
+        <div class="col-xs-6 col-sm-3 col-md-3">
+            <span class="ellipse">{{activeNum+'/'+approveNum}}</span>
+            <h4>已激活节点数/已分配节点数</h4>
+        </div>
+        <div class="col-xs-6 col-sm-3 col-md-3">
+            <span class="ellipse">{{dataUpCount+'/'+dataDownCount}}</span>
+            <h4>当日收发到数据包数</h4>
+        </div>
+        <div class="col-xs-6 col-sm-3 col-md-3">
+            <span class="ellipse">{{loss}}</span>
+            <h4>当日丢包数</h4>
+        </div>
+    </div>
+
+    <table class="table table-hover color-l">
+        <thead class="bg-m-grey font-16 ">
+        <th>DevEUI</th>
+        <th>time</th>
+        <th>data</th>
+        <th>SeqNo</th>
+        </thead>
+        <tbody class="bg-d-grey">
+        <tr ng-repeat="data in datalist">
+            <td>{{ data.devEUI }}</td>
+            <td>{{ data.time_s | cutTime }}</td>
+            <td>{{ data.data }}</td>
+            <td>{{ data.fcnt_up_node }}</td>
+        </tr>
+        </tbody>
+    </table>
+
+</div>
